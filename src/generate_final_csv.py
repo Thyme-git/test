@@ -1,26 +1,22 @@
-from statistics import correlation
-from torch.utils.data.dataset import Dataset
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import glob
-import json
 import numpy as np
 import pandas as pd
 
-from module import *
+from module import Detector, Detector2, Detector3, Detector4, SVHNDataset
 
 
 def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    test_path = glob.glob('/home/thyme/homework/hello-dian.ai/tst/mchar_test_a/mchar_test_a/*.png')
+    # load test data
+    test_path = glob.glob('../mchar_test_a/mchar_test_a/*.png')
     test_path.sort()
-    test_label = [[1]] * len(test_path)
     test_loader = torch.utils.data.DataLoader(SVHNDataset(test_path, None, 'test'),batch_size=32, shuffle=False, num_workers=10)
 
+
+    # multiple models predict
     resnet18_model = Detector().to(device)
     resnet18_model.load_state_dict(torch.load('./model.pth'))
     
@@ -37,6 +33,8 @@ def main():
     resnet18_model.eval()
     resnet50_model.eval()
     resnext50_model.eval()
+    
+    # predict
     test_pred = []
     with torch.no_grad():
         for X in tqdm(test_loader):
@@ -46,6 +44,7 @@ def main():
             resnext50_pred = resnext50_model(X)
             mobilenet_pred = mobilenet_model(X)
 
+            # mean of preds of 4 models
             pred = [ (a +  b + c + d)/4 for a, b, c, d in zip(resnet18_pred, mobilenet_pred, resnet50_pred, resnext50_pred)]
 
             output = np.concatenate([
@@ -57,17 +56,18 @@ def main():
 
     
     test_pred = np.vstack(test_pred)
-
     test_pred = np.vstack([
         test_pred[:, :11].argmax(1),
         test_pred[:, 11:22].argmax(1),
         test_pred[:, 22:33].argmax(1),
         test_pred[:, 33:44].argmax(1)]).T
 
+    
+    # store results
     out = []
     for x in test_pred:
         out.append(''.join(map(str, x[x!=10])))
-    df_submit = pd.read_csv('/home/thyme/homework/hello-dian.ai/tst/mchar_sample_submit_A.csv')
+    df_submit = pd.read_csv('../mchar_sample_submit_A.csv')
     df_submit['file_code'] = out
     df_submit.to_csv('submit_final5.csv', index=None)
 

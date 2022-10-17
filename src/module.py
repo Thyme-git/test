@@ -1,30 +1,16 @@
-from decimal import Decimal
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 import torchvision
 from PIL import Image
 from torchvision.models import resnet50, resnet18, mobilenet_v2, resnext50_32x4d
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import glob
-import json
-
-train_path = glob.glob('/home/thyme/homework/hello-dian.ai/tst/mchar_train/mchar_train/*.png')
-train_path.sort()
-train_json = json.load(open('/home/thyme/homework/hello-dian.ai/tst/mchar_train.json'))
-train_label = [train_json[x]['label'] for x in train_json]
 
 
-val_path = glob.glob('/home/thyme/homework/hello-dian.ai/tst/mchar_val/mchar_val/*.png')
-val_path.sort()
-val_json = json.load(open('/home/thyme/homework/hello-dian.ai/tst/mchar_val.json'))
-val_label = [val_json[x]['label'] for x in val_json]
-
-
+# create data set
 class SVHNDataset(Dataset):
-    def __init__(self, img_path: list[str] = train_path, img_label: list[str] = train_label, mode = 'train'):
+    def __init__(self, img_path: list[str], img_label: list[str], mode = 'train'):
         assert mode in ['train', 'validate', 'test']
         
         super().__init__()
@@ -70,15 +56,12 @@ class SVHNDataset(Dataset):
     def __len__(self):
         return len(self.img_path)
 
+
+# Detector with resnet18
 class Detector(nn.Module):
 
-  def __init__(self, class_num=11, pretrained = False):
+  def __init__(self, class_num=11):
     super(Detector, self).__init__()
-
-    if pretrained == False:
-        weights = None
-    else:
-        weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1
 
     self.net = resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1)
     self.net.fc = nn.Identity()
@@ -99,15 +82,12 @@ class Detector(nn.Module):
 
     return fc1, fc2, fc3, fc4
 
+
+# Detector with mobilenet_v2
 class Detector2(nn.Module):
 
-  def __init__(self, class_num=11, pretrained = False):
+  def __init__(self, class_num=11):
     super(Detector2, self).__init__()
-
-    if pretrained == False:
-        weights = None
-    else:
-        weights=torchvision.models.MobileNet_V2_Weights.IMAGENET1K_V1
 
     self.net = mobilenet_v2(weights=torchvision.models.MobileNet_V2_Weights.IMAGENET1K_V1).features
     self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -128,15 +108,11 @@ class Detector2(nn.Module):
 
     return fc1, fc2, fc3, fc4
 
+# Detector with resnet50
 class Detector3(nn.Module):
 
-  def __init__(self, class_num=11, pretrained = False):
+  def __init__(self, class_num=11):
     super(Detector3, self).__init__()
-
-    if pretrained == False:
-        weights = None
-    else:
-        weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1
 
     self.net = resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1)
     self.net.fc = nn.Identity()
@@ -158,58 +134,50 @@ class Detector3(nn.Module):
     return fc1, fc2, fc3, fc4
 
 
+# Detector with resnext50
 class Detector4(nn.Module):
 
-  def __init__(self, class_num=11, pretrained = False):
-    super(Detector4, self).__init__()
+    def __init__(self, class_num=11):
+        super(Detector4, self).__init__()
 
-    if pretrained == False:
-        weights = None
-    else:
-        weights=torchvision.models.ResNeXt50_32X4D_Weights.DEFAULT
+        self.net = resnext50_32x4d(weights=torchvision.models.ResNeXt50_32X4D_Weights.DEFAULT)
+        self.net.fc = nn.Identity()     
+        
+        self.bn = nn.BatchNorm1d(2048)
+        self.fc1 = nn.Linear(2048, class_num)
+        self.fc2 = nn.Linear(2048, class_num)
+        self.fc3 = nn.Linear(2048, class_num)
+        self.fc4 = nn.Linear(2048, class_num)
 
-    self.net = resnext50_32x4d(weights=torchvision.models.ResNeXt50_32X4D_Weights.DEFAULT)
-    self.net.fc = nn.Identity()
+    def forward(self, img):
+        features = self.net(img).squeeze()
 
-    self.bn = nn.BatchNorm1d(2048)
-    self.fc1 = nn.Linear(2048, class_num)
-    self.fc2 = nn.Linear(2048, class_num)
-    self.fc3 = nn.Linear(2048, class_num)
-    self.fc4 = nn.Linear(2048, class_num)
+        fc1 = self.fc1(features)
+        fc2 = self.fc2(features)
+        fc3 = self.fc3(features)
+        fc4 = self.fc4(features)
 
-  def forward(self, img):
-    features = self.net(img).squeeze()
-
-    fc1 = self.fc1(features)
-    fc2 = self.fc2(features)
-    fc3 = self.fc3(features)
-    fc4 = self.fc4(features)
-
-    return fc1, fc2, fc3, fc4
+        return fc1, fc2, fc3, fc4
 
 
-
+# criterion
 class LabelSmoothEntropy(nn.Module):
-  def __init__(self, smooth=0.1, class_weights=None, size_average='mean'):
-    super(LabelSmoothEntropy, self).__init__()
-    self.size_average = size_average
-    self.smooth = smooth
-    self.class_weights = class_weights
+  
+    def __init__(self, smooth = 0.1, size_average = 'mean'):
+        super(LabelSmoothEntropy, self).__init__()
 
-  def forward(self, preds, targets):
+        self.size_average = size_average
+        self.smooth = smooth
 
-    lb_pos, lb_neg = 1 - self.smooth, self.smooth / (preds.shape[0] - 1)
-    smoothed_lb = torch.zeros_like(preds).fill_(lb_neg).scatter_(1, targets[:, None], lb_pos)
-    log_soft = F.log_softmax(preds, dim=1)
+    def forward(self, preds, targets):
 
-    if self.class_weights is not None:
-      loss = -log_soft * smoothed_lb * self.class_weights[None, :]
-    else:
-      loss = -log_soft * smoothed_lb
+        lb_pos, lb_neg = 1 - self.smooth, self.smooth / (preds.shape[0] - 1)
+        smoothed_lb = torch.zeros_like(preds).fill_(lb_neg).scatter_(1, targets[:, None], lb_pos)
+        log_soft = F.log_softmax(preds, dim=1)
 
-    loss = loss.sum(1)
-    if self.size_average == 'mean':
-      return loss.mean()
-
-    elif self.size_average == 'sum':
-      return loss.sum()
+        loss = -log_soft * smoothed_lb
+        loss = loss.sum(1)
+        if self.size_average == 'mean':
+            return loss.mean()
+        elif self.size_average == 'sum':
+            return loss.sum()
